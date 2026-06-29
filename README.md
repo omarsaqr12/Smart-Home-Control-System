@@ -1,197 +1,129 @@
-# Smart Home Control System (WiFi + Firebase)
+# Smart Home Control System
 
-A complete IoT smart home system built with ESP32 that monitors room occupancy, controls lighting/appliances, and manages an AC unit via IR remote. All data syncs with Firebase Realtime Database and is accessible via a responsive web dashboard.
+> An ESP32 + FreeRTOS smart-home controller that detects room occupancy with directional sensor fusion, automatically drives lighting / air / audio, and exposes real-time monitoring and remote control through a cloud-synced web dashboard.
 
-## Evolution: From MQTT to Firebase
+![Platform](https://img.shields.io/badge/Platform-ESP32-E7352C?logo=espressif&logoColor=white)
+![Framework](https://img.shields.io/badge/Framework-ESP--IDF-000000?logo=espressif&logoColor=white)
+![RTOS](https://img.shields.io/badge/RTOS-FreeRTOS-00979D)
+![Language](https://img.shields.io/badge/Firmware-C-A8B9CC?logo=c&logoColor=white)
+![Cloud](https://img.shields.io/badge/Cloud-Firebase%20RTDB-FFCA28?logo=firebase&logoColor=black)
+![Dashboard](https://img.shields.io/badge/Dashboard-HTML%2FJS-F7DF1E?logo=javascript&logoColor=black)
+![License](https://img.shields.io/badge/License-Apache%202.0-blue)
 
-**Initial Approach (MQTT):**
-- Used Mosquitto MQTT broker running on a local laptop/mobile server
-- Required the mobile device to always be running the broker
-- Limited to local network access only
-- Dashboard had to be self-hosted
-- AC control feature was **not completed**
+A real-time embedded IoT system built on the ESP32. Two paired infrared break-beams plus a PIR sensor track who enters and leaves a room; the firmware counts occupants and automatically switches a lamp, an ultrasonic atomizer, and a welcome-audio player. Every state change is mirrored to a Firebase Realtime Database and rendered live on a responsive web dashboard, which can also push commands back to the device.
 
-**Current Approach (Firebase):**
-- Uses Firebase Realtime Database for cloud-based data sync
-- No local server needed — accessible from anywhere
-- Built-in web hosting for dashboard (Firebase Hosting)
-- Easier authentication and REST API
-- **AC control fully implemented as code only** with IR code capture and transmission
-- Scalable and production-ready
+Developed for **CSCE 4301 – Embedded Systems** as a 3-person team project (see [Team](#team)).
 
 ---
 
-## System Overview
+## Highlights
 
-The system combines multiple sensors and actuators:
-- **IR Break Beams + PIR**: Directional occupancy detection
-- **Web Dashboard**: Real-time monitoring and control from any device
-- **Firebase Sync**: Central data repository for all device state
-- **Device Control**: Lights (relay), atomizer, music player, and AC
-- **IR Transmission**: AC temperature control via RG56V2/BGEF remote
+- **Concurrent FreeRTOS design** — a high-rate sensor task and a lower-priority network task run independently and communicate through a FreeRTOS queue, so Wi-Fi/cloud latency never stalls time-critical presence detection.
+- **Directional occupancy detection** — a debounced state machine reads the order in which two IR beams break (outer→inner = entry, inner→outer = exit) and confirms entries with a PIR sensor, maintaining an accurate live occupant count.
+- **Bidirectional cloud control** — the device publishes state to Firebase over HTTPS REST and polls a command node, letting the dashboard toggle lights/atomizer/music from anywhere.
+- **Real-time web dashboard** — a single-page app shows occupancy, sensor readings, and device status and refreshes without a page reload.
+- **Iterated architecture** — the system was first built on a hand-rolled **MQTT** client and later migrated to **Firebase** for cloud access without a self-hosted broker (the original MQTT build is preserved in [`legacy/`](legacy/)).
 
-### Occupancy Detection
+---
+
+## Architecture
 
 ```
-ENTRANCE: outer beam breaks → inner beam breaks → PIR detects motion → count++
-EXIT:      inner beam breaks → outer beam breaks → count--
+┌──────────────────────────────────────────────────────────────────────┐
+│                        ESP32  ·  ESP-IDF + FreeRTOS                    │
+│                                                                        │
+│   Sensor task (10 ms loop)                  Network task (priority 5)  │
+│   ┌─────────────────────────┐   detection   ┌───────────────────────┐ │
+│   │ 2× IR beam-break + PIR   │──►  queue  ──►│ consume events        │ │
+│   │ debounce + directional   │  (QueueHandle)│ drive actuators       │ │
+│   │ entry/exit state machine │               │ publish state to cloud│ │
+│   └─────────────────────────┘               │ poll command node     │ │
+│            │ actuators                        └──────────┬────────────┘ │
+│            ▼                                             │ HTTPS REST   │
+│   relay · atomizer · DFPlayer Mini (UART)               ▼              │
+└─────────────────────────────────────────────┬──────────────────────────┘
+                                               │
+                                  Firebase Realtime Database
+                                               │
+                                  Web dashboard (desktop / mobile)
 ```
 
-- Both beams must break within **3 seconds** of each other
-- A **2-second cooldown** applies after every detection
-- Room is OCCUPIED when `count > 0`, EMPTY when `count == 0`
-- On entrance: lights ON, atomizer ON, music plays
-- On exit: lights OFF, atomizer OFF, music stops
+**Why two tasks?** Presence detection samples every 10 ms and must never block. By posting confirmed entry/exit events to a queue, the sensor loop hands off to the network task, which owns all the (potentially slow) Wi-Fi and HTTP work. The two are decoupled and scheduled independently by FreeRTOS.
 
 ---
 
 ## Features
 
-✅ **Occupancy Detection** – Directional IR + PIR sensor fusion
-✅ **Real-time Dashboard** – Control and monitor from web browser
-✅ **Firebase Integration** – All state synced to Realtime Database
-✅ **Device Control**:
-   - Lamp (active-LOW relay, GPIO23)
-   - Ultrasonic Atomizer (GPIO21)
-   - Music Player (DFPlayer, UART2)
-   - AC Unit (IR transmission, GPIO19)
-✅ **Automatic Sync** – Dashboard updates in real-time without page refresh
- **AC Control** – Temperature slider 16–30°C via RG56V2/BGEF remote
-
-
----
-
-## Hardware Components
-
-| Component | Purpose | Pin |
-|---|---|---|
-| ESP32 | Main microcontroller | — |
-| IR Break Beam (outer) | Entry/exit detection | GPIO 13 |
-| IR Break Beam (inner) | Entry/exit detection | GPIO 14 |
-| PIR Sensor (HC-SR501) | Motion direction confirmation | GPIO 25 |
-| DHT22 / AM2302 | Temperature & humidity | GPIO 26 |
-| Relay Module | Light control | GPIO 23 (active LOW) |
-| Ultrasonic Atomizer | Mist control | GPIO 21 |
-| DFPlayer Mini | Music playback | UART2 (GPIO 17 TX) |
-| IR LED (transmitter) | AC remote control | GPIO 19 |
+| Feature | Details |
+|---|---|
+| Occupancy detection | Directional IR break-beam + PIR sensor fusion, debounced, with a 3 s sequence window and 2 s cooldown |
+| Live occupant count | `count > 0` ⇒ room **OCCUPIED**, `count == 0` ⇒ **EMPTY** |
+| Automatic actuation | On first entry: lamp ON, atomizer ON, welcome audio plays. On last exit: everything OFF |
+| Lighting | Active-LOW relay (GPIO 23) |
+| Air freshening | Ultrasonic atomizer via transistor-driven control pin (GPIO 21) |
+| Audio | DFPlayer Mini over UART2 (GPIO 17 TX) |
+| Remote control | `LIGHTS_ON/OFF`, `ATOMIZER_ON/OFF`, `MUSIC_ON/OFF`, `STATUS` commands from the dashboard |
+| Cloud sync | Firebase Realtime Database via REST, anonymous auth with token refresh |
+| Dashboard | Responsive HTML/JS, auto-refresh, control buttons |
+| AC control *(stretch)* | IR transmit path implemented; reliable per-state code capture for the AC remote left unfinished (see [`docs/`](docs/) and [`legacy/main_ac.c`](legacy/main_ac.c)) |
 
 ---
 
-## Pin Connections
+## Tech stack
 
-### IR Break Beams
+- **MCU / framework:** ESP32, ESP-IDF, FreeRTOS
+- **Firmware:** C — GPIO, UART, HTTP client, Wi-Fi station, NVS, event groups, queues
+- **Sensors:** 2× IR break-beam (GPIO), HC-SR501 PIR (GPIO), DHT22 (single-wire, bit-banged in the legacy build)
+- **Actuators:** relay, ultrasonic atomizer, DFPlayer Mini (UART), IR LED (RMT, AC stretch goal)
+- **Cloud / UI:** Firebase Realtime Database + Hosting, HTML/CSS/JavaScript
+- **Earlier iteration:** hand-rolled MQTT 3.1.1 client over TCP sockets (`legacy/main_old.c`)
 
-**Outer (GPIO 13) — outside door:**
-```
-3.3V ──[10kΩ]──┬── GPIO 13
-               │ (phototransistor collector)
-              GND
-```
+---
 
-**Inner (GPIO 14) — inside door:**
-```
-3.3V ──[10kΩ]──┬── GPIO 14
-               │ (phototransistor collector)
-              GND
-```
+## Repository layout
 
-### PIR Sensor (GPIO 25)
 ```
-5V    ── VCC
-GND   ── GND
-GPIO 25 ── OUT
-```
-
-### DHT22 / AM2302 (GPIO 26)
-```
-3.3V  ── VCC
-GPIO 26 ── DATA (with 10kΩ pull-up to 3.3V if needed)
-GND   ── GND
-```
-
-### Relay (GPIO 23) — Active LOW
-```
-GPIO 23 ── IN1 (when LOW, relay energizes)
-5V ── JD-VCC
-GND ── GND
-```
-
-### Atomizer (GPIO 21)
-```
-GPIO 21 ── Control pin
-GND ── GND
-```
-
-### DFPlayer Mini (UART2)
-```
-GPIO 17 (TX) ── RX (via 1kΩ resistor or level shifter)
-GND ── GND
-5V  ── VCC (from separate power supply)
-```
-
-### IR Transmitter (GPIO 19)
-```
-GPIO 19 ── LED Anode (via ~470Ω current-limiting resistor)
-GND ── LED Cathode
+.
+├── main/
+│   ├── main.c               # production firmware (the built target)
+│   ├── secrets.h.example    # template for Wi-Fi + Firebase credentials
+│   └── CMakeLists.txt
+├── dashboard.html           # single-page web dashboard
+├── legacy/                  # earlier prototypes (MQTT build, AC/IR build, PIR bench test)
+├── docs/                    # project report + IR AC control guide
+├── CMakeLists.txt           # ESP-IDF project root
+└── LICENSE
 ```
 
 ---
 
-## Firebase Setup
+## Getting started
 
-Before flashing, set up Firebase:
+### Prerequisites
+- [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/) (v5.x)
+- An ESP32 dev board and the hardware in [Hardware](#hardware)
+- A Firebase project with the Realtime Database enabled
 
-1. **Create Firebase Project**
-   - Go to [console.firebase.google.com](https://console.firebase.google.com)
-   - Create new project (e.g., `embeddedpro-573f6`)
-
-2. **Enable Realtime Database**
-   - Create database in test mode (for development)
-   - Note the database URL: `https://<project>.firebaseio.com`
-
-3. **Get API Key**
-   - Go to Project Settings → Web API Key
-   - Copy the API key
-
-4. **Create `secrets.h`**
-   ```c
-   #define WIFI_SSID   "your-network-name"
-   #define WIFI_PASS   "your-wifi-password"
-   #define FIREBASE_HOST    "embeddedpro-573f6.firebaseio.com"
-   #define FIREBASE_API_KEY "YOUR_WEB_API_KEY_HERE"
-   ```
-
-### Firebase Database Structure
-```
-smarthome/room001/
-├── room       → "OCCUPIED" or "EMPTY"
-├── count      → number of people
-├── light      → "ON" or "OFF"
-├── atomizer   → "ON" or "OFF"
-├── music      → "PLAYING" or "STOPPED"
-├── temperature → °C (DHT22)
-├── humidity    → % (DHT22)
-└── command    → "LIGHTS_ON" / "LIGHTS_OFF" / "ATOMIZER_ON" / "ATOMIZER_OFF" / "MUSIC_ON" / "MUSIC_OFF" / "AC_SET_TEMP:XX" / "STATUS"
-```
-
----
-
-## Dashboard
-
-The web dashboard (`dashboard.html`) is hosted on **Firebase Hosting** at:
-```
-https://embeddedpro-573f6.web.app
-```
-
-### Features
-- **Real-time Display**: Room status, people count, sensor readings
-- **Control Buttons**: Lights, Atomizer, Music (On/Off)
-- **AC Temperature Slider**: 16–30°C with +/– buttons
-- **Responsive Design**: Works on desktop and mobile
-- **Auto-refresh**: Updates every 3 seconds without user interaction
-
-### Deploying Dashboard
+### 1. Configure credentials
 ```bash
+cp main/secrets.h.example main/secrets.h
+# then edit main/secrets.h with your Wi-Fi + Firebase values
+```
+`secrets.h` is git-ignored, so your credentials stay out of version control.
+
+### 2. Build, flash, and monitor
+```bash
+idf.py build
+idf.py -p <PORT> flash monitor      # e.g. -p COM5 (Windows) or -p /dev/ttyUSB0 (Linux)
+```
+Press **Ctrl+]** to exit the monitor.
+
+### 3. Open the dashboard
+Open `dashboard.html` in a browser (or host it on Firebase Hosting) and enter your
+Firebase Realtime Database URL and Web API key in the connection fields.
+
+```bash
+# optional: deploy the dashboard to Firebase Hosting
 npm install -g firebase-tools
 firebase login
 firebase deploy --only hosting
@@ -199,161 +131,65 @@ firebase deploy --only hosting
 
 ---
 
-## AC Remote Control (In Progress)
+## Hardware
 
-**Remote Model**: RG56V2/BGEF
-**Status**: Infrastructure ready, IR codes **pending capture** (not available in MQTT version)
+| Component | Purpose | Pin |
+|---|---|---|
+| ESP32 | Main microcontroller / Wi-Fi | — |
+| IR break-beam (outer) | Entry/exit detection | GPIO 13 |
+| IR break-beam (inner) | Entry/exit detection | GPIO 14 |
+| PIR sensor (HC-SR501) | Motion confirmation | GPIO 25 |
+| DHT22 / AM2302 | Temperature & humidity | GPIO 26 |
+| Relay module | Lamp control (active LOW) | GPIO 23 |
+| Ultrasonic atomizer | Mist / air freshening | GPIO 21 |
+| DFPlayer Mini | Audio playback | UART2 (GPIO 17 TX) |
+| IR LED (transmitter) | AC remote control *(stretch)* | GPIO 18/19 |
 
-> **Note**: AC control was planned but never started in the MQTT version. Infrastructure is now implemented in Firebase, but actual IR codes from the RG56V2/BGEF remote still need to be captured.
-
-### How It Works
-1. Dashboard sends "AC_SET_TEMP:<temp>" to Firebase `/command` node
-2. ESP32 polls `/command` and parses the temperature
-3. ESP32 transmits corresponding IR code to AC via GPIO19
-4. AC adjusts temperature
-
-### Capturing IR Codes
-
-To get the actual IR codes from your remote:
-
-1. Set `IR_CAPTURE_ENABLED` to `1` in `main.c`:
-   ```c
-   #define IR_CAPTURE_ENABLED 1
-   ```
-
-2. Compile and upload:
-   ```bash
-   idf.py build
-   idf.py -p COM5 flash monitor
-   ```
-
-3. Open Serial Monitor (115200 baud)
-   You'll see: `=== IR CODE CAPTURE MODE ===`
-
-4. Point remote at ESP32's IR receiver (GPIO 13) and press buttons:
-   - Press 16°C button → note: `IR CODE: addr=0xXX cmd=0xYY`
-   - Press 17°C button → note: `IR CODE: addr=0xXX cmd=0xYY`
-   - Continue through 30°C
-
-5. Once collected, update `handle_ac_command()` in `main.c`:
-   ```c
-   static void handle_ac_command(int temp)
-   {
-       uint8_t cmd_codes[15] = {
-           0xXX, // 16°C
-           0xYY, // 17°C
-           // ... continue through 30°C
-       };
-       uint32_t cmd = cmd_codes[temp - 16];
-       send_ir_nec(0x01, cmd);
-   }
-   ```
-
-6. Disable capture mode:
-   ```c
-   #define IR_CAPTURE_ENABLED 0
-   ```
-
-7. Recompile and upload
+> Wiring diagrams for each component are in the firmware comments and the project report under [`docs/`](docs/).
 
 ---
 
-## Configuration
+## Firebase data model
 
-Update `secrets.h` with your credentials:
-
-```c
-#define WIFI_SSID        "your-ssid"
-#define WIFI_PASS        "your-password"
-#define FIREBASE_HOST    "your-project.firebaseio.com"
-#define FIREBASE_API_KEY "your-web-api-key"
 ```
+smarthome/room001/
+├── room        → "OCCUPIED" | "EMPTY"
+├── count       → number of people
+├── light       → "ON" | "OFF"
+├── atomizer    → "ON" | "OFF"
+├── music       → "PLAYING" | "STOPPED"
+├── temperature → °C
+├── humidity    → %
+└── command     → "LIGHTS_ON" | "LIGHTS_OFF" | "ATOMIZER_ON" | "ATOMIZER_OFF"
+                   | "MUSIC_ON" | "MUSIC_OFF" | "STATUS"
+```
+
+The firmware reads `command`, executes it, then deletes the node so each command runs once.
 
 ---
 
-## Building and Flashing
+## Engineering notes
 
-Find your ESP32 COM port:
-```powershell
-Get-PnpDevice -Class Ports | Where-Object Status -eq 'OK'
-```
-
-Build, flash, and monitor:
-```bash
-idf.py -p COM5 flash monitor
-```
-
-Or step-by-step:
-```bash
-idf.py build
-idf.py -p COM5 flash
-idf.py -p COM5 monitor
-```
-
-Press **Ctrl+]** to exit monitor.
+- **Non-blocking IPC:** entry/exit events flow through a `QueueHandle_t`; the sensor loop calls `xQueueSend` without ever waiting on the network.
+- **Wi-Fi lifecycle:** connection state is tracked with a FreeRTOS **event group** and bounded auto-retry.
+- **Debouncing:** each beam requires a run of consistent samples before a state flip, rejecting electrical and optical noise.
+- **DFPlayer protocol:** audio commands are built as raw 10-byte UART frames with a computed checksum.
+- **From MQTT to Firebase:** the first build used a self-written MQTT client and a local Mosquitto broker (mutex-guarded TX, bit-banged DHT22 driver — see `legacy/main_old.c`). It was migrated to Firebase REST to remove the always-on local broker and enable access from anywhere.
 
 ---
 
-## Serial Output
+## Team
 
-### Startup
-```
-=== Smart Home — WiFi/Firebase build ===
-WiFi connected. IP: 192.168.1.100
-Firebase: anonymous sign-in OK
-Firebase ready — publishing enabled.
-System ready.
-```
+A 3-person project for CSCE 4301 (Embedded Systems):
 
-### Sensor Debug (every 2 seconds)
-```
-SENSORS: outer=1 inner=1 pir=0 | state=0
-```
+- **Omar Saqr** — [@omarsaqr12](https://github.com/omarsaqr12)
+- **Mostafa Gaafar** — [@mostafa21314](https://github.com/mostafa21314)
+- **Farida Bey**
 
-### Commands Received
-```
-Command received: LIGHTS_ON
-firebase_put(/smarthome/room001/light) = "ON" ✓
-```
-
-### IR Capture Mode
-```
-=== IR CODE CAPTURE MODE ===
-Press buttons on your remote — codes will be logged to serial
-IR CODE: addr=0x01 cmd=0x10
-```
+This repository is a hosted copy of the team's work. The full commit history (preserved here) reflects each contributor's authorship.
 
 ---
 
-## Troubleshooting
+## License
 
-| Issue | Solution |
-|---|---|
-| WiFi won't connect | Check SSID/password in `secrets.h`, verify WiFi 2.4GHz |
-| Dashboard shows "Unknown" | Check Firebase API Key, verify REST URL format |
-| No sensor data in Firebase | Verify Firebase anonymous sign-in succeeded in logs |
-| IR codes not capturing | Check GPIO13 connection, ensure remote is pointed correctly |
-| AC not responding | Capture IR codes and verify they match remote output |
-
----
-
-## Implementation Status
-
-### Completed ✅
-- WiFi + Firebase Realtime Database integration
-- Occupancy detection (IR break beams + PIR sensor fusion)
-- Device control (lights, atomizer, music player)
-- Web dashboard with real-time sync
-- IR transmitter hardware setup (GPIO19)
-- IR code capture mode for remote learning
-- Command polling and parsing infrastructure
-
-### In Progress 🔄
-- **AC Remote Control**: Capture actual IR codes from RG56V2/BGEF remote (16–30°C)
-- Update `handle_ac_command()` with captured codes
-- Test complete AC control flow end-to-end
-
-### Future Enhancements
-- [ ] Fine-tune sensor debouncing parameters
-- [ ] Add temperature/humidity chart display to dashboard
-- [ ] Add scheduling/automation features
+Released under the [Apache License 2.0](LICENSE).

@@ -85,11 +85,11 @@ Then rebuild and reflash.
 With everything flashed and the IR LED wired up, publish an MQTT message to test:
 
 ```bash
-# Using mosquitto_pub
-mosquitto_pub -h 172.20.10.2 -u admin -P 10001000 \
+# Using mosquitto_pub (replace host/user/pass with your broker's)
+mosquitto_pub -h <BROKER_IP> -u <USER> -P <PASSWORD> \
   -t smarthome/room001/command -m AC_ON
 
-mosquitto_pub -h 172.20.10.2 -u admin -P 10001000 \
+mosquitto_pub -h <BROKER_IP> -u <USER> -P <PASSWORD> \
   -t smarthome/room001/command -m AC_OFF
 ```
 
@@ -97,11 +97,11 @@ You can also check the AC state at any time:
 
 ```bash
 # Subscribe to AC state feedback
-mosquitto_sub -h 172.20.10.2 -u admin -P 10001000 \
+mosquitto_sub -h <BROKER_IP> -u <USER> -P <PASSWORD> \
   -t smarthome/room001/ac
 
 # Or request current state
-mosquitto_pub -h 172.20.10.2 -u admin -P 10001000 \
+mosquitto_pub -h <BROKER_IP> -u <USER> -P <PASSWORD> \
   -t smarthome/room001/command -m AC_STATUS
 ```
 

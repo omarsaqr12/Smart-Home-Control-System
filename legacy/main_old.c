@@ -19,15 +19,16 @@
 #include "soc/gpio_reg.h"
 
 // ── WiFi credentials ──────────────────────────────
-#define WIFI_SSID       "Mostafa’s iPhone"
-#define WIFI_PASS       "10001000"
+#define WIFI_SSID       "your-network-name"
+#define WIFI_PASS       "your-wifi-password"
 #define WIFI_MAX_RETRY  10
 
 // ── MQTT broker ───────────────────────────────────
-#define MQTT_HOST       "172.20.10.2"
+// Configure these for your local Mosquitto broker.
+#define MQTT_HOST       "192.168.1.10"     // broker IP on your LAN
 #define MQTT_PORT       1883
-#define MQTT_USER       "admin"
-#define MQTT_PASS       "10001000"
+#define MQTT_USER       "your-mqtt-user"
+#define MQTT_PASS       "your-mqtt-password"
 #define MQTT_CLIENT_ID  "ESP32-SmartHome"
 #define MQTT_KEEPALIVE  60
 
