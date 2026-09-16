@@ -1,195 +1,83 @@
 # Smart Home Control System
 
-> An ESP32 + FreeRTOS smart-home controller that detects room occupancy with directional sensor fusion, automatically drives lighting / air / audio, and exposes real-time monitoring and remote control through a cloud-synced web dashboard.
+**An ESP32 / FreeRTOS room-occupancy and actuator-control prototype with a Firebase-backed web dashboard.**
 
-![Platform](https://img.shields.io/badge/Platform-ESP32-E7352C?logo=espressif&logoColor=white)
-![Framework](https://img.shields.io/badge/Framework-ESP--IDF-000000?logo=espressif&logoColor=white)
-![RTOS](https://img.shields.io/badge/RTOS-FreeRTOS-00979D)
-![Language](https://img.shields.io/badge/Firmware-C-A8B9CC?logo=c&logoColor=white)
-![Cloud](https://img.shields.io/badge/Cloud-Firebase%20RTDB-FFCA28?logo=firebase&logoColor=black)
-![Dashboard](https://img.shields.io/badge/Dashboard-HTML%2FJS-F7DF1E?logo=javascript&logoColor=black)
-![License](https://img.shields.io/badge/License-Apache%202.0-blue)
+Built as a three-person **CSCE 4301 — Embedded Systems** project at the American University in Cairo. The repository contains current ESP-IDF firmware, a single-file dashboard, earlier experiments and a project report. The most useful engineering material is the beam-sequence occupancy state machine and its separation from potentially slow network requests. This is a **hardware-dependent course prototype**, not a security-hardened home-automation product.
 
-A real-time embedded IoT system built on the ESP32. Two paired infrared break-beams plus a PIR sensor track who enters and leaves a room; the firmware counts occupants and automatically switches a lamp, an ultrasonic atomizer, and a welcome-audio player. Every state change is mirrored to a Firebase Realtime Database and rendered live on a responsive web dashboard, which can also push commands back to the device.
+> **Important security and completeness notice:** The current firmware and dashboard sign in to Firebase but send Realtime Database requests with `?key=<web-api-key>` instead of the Firebase ID token. An API key is **not** a Realtime Database authentication credential. Do not expose this prototype through permissive public database rules or connect it to unattended mains-powered equipment. Authentication, HTTPS certificate validation, command acknowledgments and live hardware testing need to be completed before any real deployment. See [engineering review](docs/ENGINEERING_REVIEW.md).
 
-Developed for **CSCE 4301 – Embedded Systems** as a 3-person team project (see [Team](#team)).
+## What was built
 
----
+- A 10 ms polling loop for two doorway IR break-beams, using a debounced order-of-interruption state machine. Entry requires PIR confirmation; exits decrement a nonnegative software count.
+- A FreeRTOS queue that passes detection events to a separate network/actuation task. Slow HTTP requests are not made directly in the sensor polling loop.
+- An active-low lamp relay, toggle-pulsed atomizer and UART DFPlayer audio commands.
+- An ESP-IDF Wi-Fi station, an attempted Firebase anonymous sign-in and REST read/write routines, plus a browser dashboard with status display and remote command buttons.
+- Preserved [`legacy/`](legacy/) implementations, including a hand-written MQTT iteration and unfinished air-conditioner IR experiments. These are **not** the compiled current application.
 
-## Highlights
+The architecture and interfaces are visible in [`main/main.c`](main/main.c) and [`dashboard.html`](dashboard.html). The project report is preserved in [`docs/Project-Report.docx`](docs/Project-Report.docx); this review did not independently validate its binary contents, figures or hardware measurements.
 
-- **Concurrent FreeRTOS design** — a high-rate sensor task and a lower-priority network task run independently and communicate through a FreeRTOS queue, so Wi-Fi/cloud latency never stalls time-critical presence detection.
-- **Directional occupancy detection** — a debounced state machine reads the order in which two IR beams break (outer→inner = entry, inner→outer = exit) and confirms entries with a PIR sensor, maintaining an accurate live occupant count.
-- **Bidirectional cloud control** — the device publishes state to Firebase over HTTPS REST and polls a command node, letting the dashboard toggle lights/atomizer/music from anywhere.
-- **Real-time web dashboard** — a single-page app shows occupancy, sensor readings, and device status and refreshes without a page reload.
-- **Iterated architecture** — the system was first built on a hand-rolled **MQTT** client and later migrated to **Firebase** for cloud access without a self-hosted broker (the original MQTT build is preserved in [`legacy/`](legacy/)).
+## How the current code is arranged
 
----
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                        ESP32  ·  ESP-IDF + FreeRTOS                    │
-│                                                                        │
-│   Sensor task (10 ms loop)                  Network task (priority 5)  │
-│   ┌─────────────────────────┐   detection   ┌───────────────────────┐ │
-│   │ 2× IR beam-break + PIR   │──►  queue  ──►│ consume events        │ │
-│   │ debounce + directional   │  (QueueHandle)│ drive actuators       │ │
-│   │ entry/exit state machine │               │ publish state to cloud│ │
-│   └─────────────────────────┘               │ poll command node     │ │
-│            │ actuators                        └──────────┬────────────┘ │
-│            ▼                                             │ HTTPS REST   │
-│   relay · atomizer · DFPlayer Mini (UART)               ▼              │
-└─────────────────────────────────────────────┬──────────────────────────┘
+```text
+ESP32: main/main.c
+  GPIO 13/14 IR beam input + GPIO 25 PIR input
+         │
+         ▼
+  debouncing → directional state machine → detection_queue
                                                │
-                                  Firebase Realtime Database
+                                               ▼
+                                         network_task
+                                         ├─ relay / atomizer / DFPlayer
+                                         └─ Firebase REST read/write
                                                │
-                                  Web dashboard (desktop / mobile)
+                                               ▼
+                                      dashboard.html (browser)
 ```
 
-**Why two tasks?** Presence detection samples every 10 ms and must never block. By posting confirmed entry/exit events to a queue, the sensor loop hands off to the network task, which owns all the (potentially slow) Wi-Fi and HTTP work. The two are decoupled and scheduled independently by FreeRTOS.
+| Path | Purpose |
+| --- | --- |
+| [`main/main.c`](main/main.c) | Current compiled firmware; GPIO, FreeRTOS tasks, Firebase requests, state machine, actuation |
+| [`main/secrets.h.example`](main/secrets.h.example) | Placeholder Wi-Fi and Firebase configuration; never commit a populated `secrets.h` |
+| [`dashboard.html`](dashboard.html) | Browser UI and Firebase REST client; configuration form is currently hidden |
+| [`legacy/`](legacy/) | Historical MQTT, AC and sensor experiments; retained for provenance |
+| [`docs/IR-AC-Control-Guide.md`](docs/IR-AC-Control-Guide.md) | Guide for an earlier MQTT/IR experiment, **not** instructions for the current build |
+| [`docs/ENGINEERING_REVIEW.md`](docs/ENGINEERING_REVIEW.md) | Verified source issues, review limits and a safe validation plan |
 
----
+## Inspect or build the firmware
 
-## Features
+**Requirements:** ESP32 board, an ESP-IDF v5.x environment, compatible sensors and actuators, and a Firebase project if cloud functions are to be investigated. Physical pinouts and electrical safety must be checked against the actual modules and board. Do not connect a mains load for initial testing.
 
-| Feature | Details |
-|---|---|
-| Occupancy detection | Directional IR break-beam + PIR sensor fusion, debounced, with a 3 s sequence window and 2 s cooldown |
-| Live occupant count | `count > 0` ⇒ room **OCCUPIED**, `count == 0` ⇒ **EMPTY** |
-| Automatic actuation | On first entry: lamp ON, atomizer ON, welcome audio plays. On last exit: everything OFF |
-| Lighting | Active-LOW relay (GPIO 23) |
-| Air freshening | Ultrasonic atomizer via transistor-driven control pin (GPIO 21) |
-| Audio | DFPlayer Mini over UART2 (GPIO 17 TX) |
-| Remote control | `LIGHTS_ON/OFF`, `ATOMIZER_ON/OFF`, `MUSIC_ON/OFF`, `STATUS` commands from the dashboard |
-| Cloud sync | Firebase Realtime Database via REST, anonymous auth with token refresh |
-| Dashboard | Responsive HTML/JS, auto-refresh, control buttons |
-| AC control *(stretch)* | IR transmit path implemented; reliable per-state code capture for the AC remote left unfinished (see [`docs/`](docs/) and [`legacy/main_ac.c`](legacy/main_ac.c)) |
-
----
-
-## Tech stack
-
-- **MCU / framework:** ESP32, ESP-IDF, FreeRTOS
-- **Firmware:** C — GPIO, UART, HTTP client, Wi-Fi station, NVS, event groups, queues
-- **Sensors:** 2× IR break-beam (GPIO), HC-SR501 PIR (GPIO), DHT22 (single-wire, bit-banged in the legacy build)
-- **Actuators:** relay, ultrasonic atomizer, DFPlayer Mini (UART), IR LED (RMT, AC stretch goal)
-- **Cloud / UI:** Firebase Realtime Database + Hosting, HTML/CSS/JavaScript
-- **Earlier iteration:** hand-rolled MQTT 3.1.1 client over TCP sockets (`legacy/main_old.c`)
-
----
-
-## Repository layout
-
-```
-.
-├── main/
-│   ├── main.c               # production firmware (the built target)
-│   ├── secrets.h.example    # template for Wi-Fi + Firebase credentials
-│   └── CMakeLists.txt
-├── dashboard.html           # single-page web dashboard
-├── legacy/                  # earlier prototypes (MQTT build, AC/IR build, PIR bench test)
-├── docs/                    # project report + IR AC control guide
-├── CMakeLists.txt           # ESP-IDF project root
-└── LICENSE
-```
-
----
-
-## Getting started
-
-### Prerequisites
-- [ESP-IDF](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/get-started/) (v5.x)
-- An ESP32 dev board and the hardware in [Hardware](#hardware)
-- A Firebase project with the Realtime Database enabled
-
-### 1. Configure credentials
 ```bash
 cp main/secrets.h.example main/secrets.h
-# then edit main/secrets.h with your Wi-Fi + Firebase values
-```
-`secrets.h` is git-ignored, so your credentials stay out of version control.
-
-### 2. Build, flash, and monitor
-```bash
+# Fill in your own Wi-Fi and Firebase project values locally.
+idf.py set-target esp32
 idf.py build
-idf.py -p <PORT> flash monitor      # e.g. -p COM5 (Windows) or -p /dev/ttyUSB0 (Linux)
-```
-Press **Ctrl+]** to exit the monitor.
-
-### 3. Open the dashboard
-Open `dashboard.html` in a browser (or host it on Firebase Hosting) and enter your
-Firebase Realtime Database URL and Web API key in the connection fields.
-
-```bash
-# optional: deploy the dashboard to Firebase Hosting
-npm install -g firebase-tools
-firebase login
-firebase deploy --only hosting
 ```
 
----
+The above commands are a build recipe, **not a recorded successful build**. `main/secrets.h` is git-ignored but credentials can still leak through logs or shared binaries. This review could not run ESP-IDF, flash an ESP32 or inspect physical hardware. Do not deploy against a live database until the security issues above are addressed. For safe bench testing, use an isolated, current-limited setup and simulated or low-voltage loads.
 
-## Hardware
+The browser file can be opened locally to inspect the UI. Its Firebase configuration card has `display: none`, and its current automatic startup requires configuration that the UI does not expose. Its AC setpoint button sends `AC_SET_TEMP:<n>` but the current firmware command handler does not implement that command. The dashboard should be treated as a **prototype**, not a working end-to-end demonstration without further work.
 
-| Component | Purpose | Pin |
-|---|---|---|
-| ESP32 | Main microcontroller / Wi-Fi | — |
-| IR break-beam (outer) | Entry/exit detection | GPIO 13 |
-| IR break-beam (inner) | Entry/exit detection | GPIO 14 |
-| PIR sensor (HC-SR501) | Motion confirmation | GPIO 25 |
-| DHT22 / AM2302 | Temperature & humidity | GPIO 26 |
-| Relay module | Lamp control (active LOW) | GPIO 23 |
-| Ultrasonic atomizer | Mist / air freshening | GPIO 21 |
-| DFPlayer Mini | Audio playback | UART2 (GPIO 17 TX) |
-| IR LED (transmitter) | AC remote control *(stretch)* | GPIO 18/19 |
+## Hardware interface documented by the current firmware
 
-> Wiring diagrams for each component are in the firmware comments and the project report under [`docs/`](docs/).
+| Device | GPIO | Status in current firmware |
+| --- | --- | --- |
+| Outer / inner break-beams | 13 / 14 | Polled for directional detection |
+| PIR sensor | 25 | Used to confirm entries |
+| Relay control | 23 | Active-low output |
+| Atomizer button/control | 21 | Timed pulse; software state assumes successful toggle |
+| DFPlayer Mini TX | 17 (UART2) | One-way playback commands |
+| DHT sensor pin | 26 | Defined but no current sensor-read/publish loop was established in this source review |
+| AC infrared output | Historical experiment | Not implemented by the compiled `main/main.c` command handler |
 
----
+## What still needs verification
 
-## Firebase data model
+The system counts **detected doorway sequences**, not independently verified people. Two people crossing together, a stalled sensor, PIR false positives, queue overflow, loss of power, and missed events can desynchronize the counter. Specifically, the last-exit network handler publishes `EMPTY` without publishing the zero count, so the dashboard can show contradictory values. The current command node is a single shared value; overwrites and delete failures are not acknowledged transactionally. Sensor sampling is also paused during the cooldown rather than preserving edge history.
 
-```
-smarthome/room001/
-├── room        → "OCCUPIED" | "EMPTY"
-├── count       → number of people
-├── light       → "ON" | "OFF"
-├── atomizer    → "ON" | "OFF"
-├── music       → "PLAYING" | "STOPPED"
-├── temperature → °C
-├── humidity    → %
-└── command     → "LIGHTS_ON" | "LIGHTS_OFF" | "ATOMIZER_ON" | "ATOMIZER_OFF"
-                   | "MUSIC_ON" | "MUSIC_OFF" | "STATUS"
-```
+Before representing this as an end-to-end working demo, verify authenticated database requests with restrictive rules; certificate validation; token refresh/recovery; count transitions and queue pressure; command acknowledgment/replay protection; sensor calibration; actuator state after restart; and dashboard behavior with a real board. A detailed source-based checklist is in [`docs/ENGINEERING_REVIEW.md`](docs/ENGINEERING_REVIEW.md).
 
-The firmware reads `command`, executes it, then deletes the node so each command runs once.
+## Team and attribution
 
----
+The original project documentation records the team as **Omar Saqr**, **Mostafa Gaafar** and **Farida Bey**. This repository preserves their work and history. Individual file-by-file authorship and hardware test responsibility were not independently established by this review; do not infer sole authorship from the repository owner.
 
-## Engineering notes
-
-- **Non-blocking IPC:** entry/exit events flow through a `QueueHandle_t`; the sensor loop calls `xQueueSend` without ever waiting on the network.
-- **Wi-Fi lifecycle:** connection state is tracked with a FreeRTOS **event group** and bounded auto-retry.
-- **Debouncing:** each beam requires a run of consistent samples before a state flip, rejecting electrical and optical noise.
-- **DFPlayer protocol:** audio commands are built as raw 10-byte UART frames with a computed checksum.
-- **From MQTT to Firebase:** the first build used a self-written MQTT client and a local Mosquitto broker (mutex-guarded TX, bit-banged DHT22 driver — see `legacy/main_old.c`). It was migrated to Firebase REST to remove the always-on local broker and enable access from anywhere.
-
----
-
-## Team
-
-A 3-person project for CSCE 4301 (Embedded Systems):
-
-- **Omar Saqr** — [@omarsaqr12](https://github.com/omarsaqr12)
-- **Mostafa Gaafar** — [@mostafa21314](https://github.com/mostafa21314)
-- **Farida Bey**
-
-This repository is a hosted copy of the team's work. The full commit history (preserved here) reflects each contributor's authorship.
-
----
-
-## License
-
-Released under the [Apache License 2.0](LICENSE).
+**License:** [Apache-2.0](LICENSE), unchanged by this review.
